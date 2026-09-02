@@ -1,5 +1,5 @@
 [project]
-name = "embedded-driver-finder"
+name = "grepo"
 version = "0.1.0"
 description = ""
 authors = [

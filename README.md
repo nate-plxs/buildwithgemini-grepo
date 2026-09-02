@@ -1,4 +1,4 @@
-# ⚡ Embedded Driver Finder (BuildWithGemini)
+# ⚡ grepo (grep repositories)
 
 An intelligent agentic application built with the **Google Agent Development Kit (ADK)** and **Gemini 2.5/3.6** that queries, explores, evaluates, and remembers embedded software driver repositories across **GitHub** and **Codeberg**.
 
