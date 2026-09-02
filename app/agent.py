@@ -26,21 +26,72 @@ from google.genai import types
 MODEL = "gemini-3.6-flash"
 
 
-def search_github_repositories(query: str, target_mcu: str = "STM32") -> str:
-    """Queries GitHub REST API to locate C++20/embedded software repositories, detailed metadata, and specific matching files.
+def search_code_repositories(
+    query: str, target_mcu: str = "STM32", language: str = "cpp", platform: str = "github"
+) -> str:
+    """Queries code repositories (GitHub or Codeberg) for embedded software driver implementations, file trees, and metadata.
 
     Args:
         query: Search query for driver or peripheral (e.g., 'SPI NOR Flash', 'I2C Sensor', 'CAN driver').
-        target_mcu: Target hardware platform or toolchain (e.g., 'STM32', 'ARM GCC', 'Cortex-M').
+        target_mcu: Target hardware platform or toolchain (e.g., 'STM32', 'ARM GCC', 'Cortex-M', 'RP2040').
+        language: Programming language filter ('cpp', 'rust', or 'c').
+        platform: Repository hosting platform ('github' or 'codeberg').
 
     Returns:
-        JSON string containing matching GitHub repositories, descriptions, stars, last_commit_date, latest_release, and specific file URLs.
+        JSON string containing matching repositories, metadata, file tree links, stars, and commit dates.
     """
+    if platform.lower() == "codeberg":
+        search_term = f"{query} {target_mcu}"
+        encoded_query = urllib.parse.quote_plus(search_term)
+        url = f"https://codeberg.org/api/v1/repos/search?q={encoded_query}&limit=5"
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "EmbeddedDriverFinderAgent/1.0"}
+        )
+        try:
+            with urllib.request.urlopen(req) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                items = data.get("data", [])
+                results = []
+                for item in items:
+                    full_name = item.get("full_name")
+                    html_url = item.get("html_url")
+                    results.append(
+                        {
+                            "platform": "Codeberg",
+                            "repository": full_name,
+                            "repo_url": html_url,
+                            "description": item.get("description", "No description."),
+                            "stars": item.get("stars_count", 0),
+                            "last_commit_date": item.get("updated_at", "N/A"),
+                            "latest_release": "Codeberg Repo",
+                            "matching_files": [
+                                {"path": "Repository Link", "url": html_url}
+                            ],
+                        }
+                    )
+                return json.dumps(
+                    {
+                        "query": search_term,
+                        "platform": "Codeberg",
+                        "count": len(results),
+                        "repositories": results,
+                    },
+                    indent=2,
+                )
+        except Exception as e:
+            return json.dumps({"error": f"Failed to search Codeberg: {str(e)}"})
+
     headers = {
         "User-Agent": "EmbeddedDriverFinderAgent/1.0",
         "Accept": "application/vnd.github.v3+json",
     }
-    search_term = f"{query} {target_mcu} language:cpp"
+    github_lang = "cpp"
+    if language.lower() in ["rust", "rs"]:
+        github_lang = "rust"
+    elif language.lower() == "c":
+        github_lang = "c"
+
+    search_term = f"{query} {target_mcu} language:{github_lang}".strip()
     encoded_query = urllib.parse.quote_plus(search_term)
     url = f"https://api.github.com/search/repositories?q={encoded_query}&sort=stars&order=desc"
 
@@ -51,6 +102,12 @@ def search_github_repositories(query: str, target_mcu: str = "STM32") -> str:
             data = json.loads(response.read().decode("utf-8"))
             items = data.get("items", [])[:5]
 
+            exts = [".hpp", ".h", ".cpp", ".cc"]
+            if github_lang == "rust":
+                exts = [".rs"]
+            elif github_lang == "c":
+                exts = [".h", ".c"]
+
             results = []
             for item in items:
                 owner_repo = item.get("full_name")
@@ -58,7 +115,6 @@ def search_github_repositories(query: str, target_mcu: str = "STM32") -> str:
                 pushed_at = item.get("pushed_at", "N/A")
                 default_branch = item.get("default_branch", "main")
 
-                # Fetch latest release date
                 rel_url = f"https://api.github.com/repos/{owner_repo}/releases/latest"
                 rel_req = urllib.request.Request(rel_url, headers=headers)
                 latest_release = "No official release tag"
@@ -71,7 +127,6 @@ def search_github_repositories(query: str, target_mcu: str = "STM32") -> str:
                 except Exception:
                     pass
 
-                # Fetch file tree to obtain direct URLs to driver header/source files
                 tree_url = f"https://api.github.com/repos/{owner_repo}/git/trees/{default_branch}?recursive=1"
                 tree_req = urllib.request.Request(tree_url, headers=headers)
                 matching_files = []
@@ -81,8 +136,7 @@ def search_github_repositories(query: str, target_mcu: str = "STM32") -> str:
                         for t_item in tree_data.get("tree", []):
                             path = t_item.get("path", "")
                             if t_item.get("type") == "blob" and any(
-                                path.lower().endswith(ext)
-                                for ext in [".hpp", ".h", ".cpp", ".cc"]
+                                path.lower().endswith(ext) for ext in exts
                             ):
                                 file_url = f"https://github.com/{owner_repo}/blob/{default_branch}/{path}"
                                 matching_files.append({"path": path, "url": file_url})
@@ -91,6 +145,7 @@ def search_github_repositories(query: str, target_mcu: str = "STM32") -> str:
 
                 results.append(
                     {
+                        "platform": "GitHub",
                         "repository": owner_repo,
                         "repo_url": item.get("html_url"),
                         "description": item.get("description", "No description."),
@@ -102,7 +157,12 @@ def search_github_repositories(query: str, target_mcu: str = "STM32") -> str:
                 )
 
             return json.dumps(
-                {"query": search_term, "count": len(results), "repositories": results},
+                {
+                    "query": search_term,
+                    "platform": "GitHub",
+                    "count": len(results),
+                    "repositories": results,
+                },
                 indent=2,
             )
 
@@ -157,35 +217,35 @@ root_agent = Agent(
         retry_options=types.HttpRetryOptions(attempts=3),
     ),
     instruction=(
-        "You are an Embedded Modern C++ Software Engineering Agent specializing in ARM, STM32, "
-        "and C++20/C++23 driver implementations.\n\n"
+        "You are an Embedded Systems Software Engineering Agent specializing in C++ (C++20/C++23), "
+        "Rust, and C driver implementations for ARM, STM32, and microcontroller platforms.\n\n"
         "CORE RESPONSE REQUIREMENTS:\n"
         "1. ALWAYS inspect PRELOADED MEMORIES at the start of each turn to recall previously discovered "
         "repositories, their confidence ratings, file URLs, and driver details.\n"
         "2. Query and list any relevant remembered repositories first in your output.\n"
-        "3. NEXT, perform new live searches using `search_github_repositories` and `fetch_github_file_content` "
-        "for C++20/C++23 embedded drivers matching the user request.\n"
+        "3. NEXT, perform new live searches using `search_code_repositories` and `fetch_github_file_content` "
+        "for embedded drivers matching the user request and specified programming language (C++, Rust, or C) and platform (GitHub or Codeberg).\n"
         "4. For EACH repository presented (both from memory and newly searched), provide:\n"
-        "   - Repository Link & Name: e.g. [owner/repo](https://github.com/owner/repo)\n"
+        "   - Repository Link & Name: e.g. [owner/repo](https://github.com/owner/repo) or [owner/repo](https://codeberg.org/owner/repo)\n"
+        "   - Platform Badge: 🐙 GitHub or 🏔️ Codeberg\n"
         "   - Match Confidence Score: e.g., '92% Match (High Confidence)' or '45% Match (Partial Match)'. "
-        "     Rate 90%+ for modern C++20/23, STM32/ARM GCC targeted drivers matching requested peripheral. "
-        "     Rate 30-50% for older C++98/C++11, generic Arduino, or partial matches.\n"
+        "     Rate 90%+ for modern C++20/Rust/C drivers matching requested hardware platform and peripheral. "
+        "     Rate 30-50% for legacy code or partial matches.\n"
         "   - Metadata:\n"
-        "     * ⭐ GitHub Stars: Number of stargazers\n"
+        "     * ⭐ Stars: Number of stargazers\n"
         "     * 📅 Last Commit Date: Date of last push\n"
         "     * 🏷️ Latest Release Version & Date: Release tag or 'No official release tag'\n"
-        "   - Specific Matching File Links: Direct markdown links to the source/header files inside the repository "
-        "(e.g., [`flashlib.h`](https://github.com/owner/repo/blob/main/flashlib.h)).\n"
-        "   - Comparison & Architectural Summary: C++ features used (RAII, concepts, std::span, DMA support, HAL/LL), pros/cons, and confidence rationale.\n"
+        "   - Specific Matching File Links: Direct markdown links to source/header/RS files inside the repository.\n"
+        "   - Comparison & Architectural Summary: Language idioms used (C++20 concepts/RAII, Rust safe HAL/embedded-hal traits, or C drivers), pros/cons, and confidence rationale.\n"
         "5. AUTOMATIC MEMORY SAVING SECTION:\n"
         "   At the very end of your response, ALWAYS include a dedicated section titled:\n"
         "   '### 📌 Discovered Repositories Registered to Memory'\n"
-        "   Format each item clearly as: 'REGISTERED_REPO: owner/repo | FILES: url1, url2 | CONFIDENCE: X% | TARGET: platform'. "
+        "   Format each item clearly as: 'REGISTERED_REPO: owner/repo | PLATFORM: site | FILES: url1, url2 | CONFIDENCE: X% | TARGET: platform'. "
         "   This explicit structured format enables Vertex AI Memory Bank to reliably persist these repositories into cross-session memory."
     ),
     tools=[
         PreloadMemoryTool(),
-        search_github_repositories,
+        search_code_repositories,
         fetch_github_file_content,
     ],
     after_agent_callback=generate_memories_callback,

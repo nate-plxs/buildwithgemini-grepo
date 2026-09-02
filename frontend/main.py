@@ -101,8 +101,15 @@ def _extract_parts(parts: list) -> list[dict]:
 async def chat(req: Request):
     body = await req.json()
     message = body.get("message", "")
+    language = body.get("language", "C++")
+    platform = body.get("platform", "GitHub")
     user_id = body.get("user_id") or "web-user"
     parts: list[dict] = []
+
+    prompt = (
+        f"[Search Filter Settings | Language: {language} | Platform: {platform}]\n\n"
+        f"User Query: {message}"
+    )
 
     timeout_config = httpx.Timeout(300.0, connect=30.0)
     async with httpx.AsyncClient(
@@ -115,7 +122,7 @@ async def chat(req: Request):
         msg = Message(
             message_id=str(uuid.uuid4()),
             role=Role.ROLE_USER,
-            parts=[Part(text=message)],
+            parts=[Part(text=prompt)],
             context_id=_contexts.get(user_id),
         )
         send_req = SendMessageRequest(message=msg)
