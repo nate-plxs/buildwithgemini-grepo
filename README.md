@@ -48,7 +48,7 @@ embedded-driver-finder/
 
 ```bash
 cd frontend
-export AGENT_ENGINE_RESOURCE_NAME="projects/948085680099/locations/us-central1/reasoningEngines/6541361360767287296"
+export AGENT_ENGINE_RESOURCE_NAME="projects/948085680099/locations/us-east1/reasoningEngines/7392007877445025792"
 export AGENT_DIRECTORY="app"
 python3 main.py
 ```
